@@ -152,7 +152,11 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     options.add_argument('--window-size=1920,1080')
     
     try:
-        service = Service(ChromeDriverManager().install())
+        driver_path = ChromeDriverManager().install()
+        # Ensure we use the actual chromedriver binary (remove any extra path components)
+        driver_path = os.path.join(os.path.dirname(driver_path), 'chromedriver')
+        logger.info(f"Using ChromeDriver path: {driver_path}")
+        service = Service(driver_path)
         driver = webdriver.Chrome(service=service, options=options)
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
