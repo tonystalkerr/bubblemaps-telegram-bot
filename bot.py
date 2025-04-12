@@ -163,84 +163,139 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         driver = webdriver.Chrome(service=service, options=options)
         
         # Set a page load timeout
-        driver.set_page_load_timeout(60)
+        driver.set_page_load_timeout(120)  # Increased timeout
         
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
         
         try:
             driver.get(url)
+            # Wait for initial page load
+            await asyncio.sleep(5)
+            
+            # Scroll down slightly to trigger lazy loading
+            driver.execute_script("window.scrollBy(0, 300);")
+            await asyncio.sleep(3)
+            
+            # Scroll back to top
+            driver.execute_script("window.scrollTo(0, 0);")
+            await asyncio.sleep(2)
         except Exception as e:
             logger.error(f"Page load error: {e}")
-            # Take screenshot anyway - it might have loaded enough elements
         
-        logger.info("Checking for visualization elements...")
+        # Try multiple approaches to find and interact with the visualization
         
-        # Try multiple selectors in case the website structure changed
+        # 1. Wait for loading indicators to disappear
+        try:
+            WebDriverWait(driver, 30).until_not(
+                EC.presence_of_element_located((By.CLASS_NAME, "loading-indicator"))
+            )
+            logger.info("Loading indicator disappeared")
+        except Exception as e:
+            logger.warning(f"No loading indicator found or it didn't disappear: {e}")
+        
+        # 2. Look for visualization elements with various selectors
         possible_selectors = [
-            "bubblemaps-canvas",  # Original selector
+            "bubblemaps-canvas",
             "canvas",
             ".visualization-container",
             "#visualization",
-            ".token-visualization"
+            ".token-visualization",
+            "[data-testid='visualization']",
+            ".bubblemap",
+            ".map-container"
         ]
         
-        # Wait for any of the possible elements to appear
         element_found = False
         for selector in possible_selectors:
             try:
-                logger.info(f"Looking for element with selector: {selector}")
-                selector_type = By.CLASS_NAME if selector.startswith(".") or not selector.startswith(("#", ".")) else By.CSS_SELECTOR
-                element = WebDriverWait(driver, 30).until(
-                    EC.visibility_of_element_located((selector_type, selector.lstrip(".#")))
+                selector_type = By.CLASS_NAME if not selector.startswith(("#", ".")) else By.CSS_SELECTOR
+                selector_name = selector.lstrip(".#")
+                logger.info(f"Looking for element with selector: {selector} ({selector_type}: {selector_name})")
+                
+                element = WebDriverWait(driver, 20).until(
+                    EC.visibility_of_element_located((selector_type, selector_name))
                 )
                 logger.info(f"Found element with selector: {selector}")
+                
+                # Try to interact with the element to ensure it's fully loaded
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    logger.warning(f"Could not scroll to element: {e}")
+                
                 element_found = True
                 break
             except Exception as e:
                 logger.warning(f"Element with selector '{selector}' not found: {e}")
         
-        # Even if no specific element is found, wait a bit and take a screenshot anyway
-        wait_time = 20 if element_found else 45
+        # 3. Even if elements aren't found, wait a reasonable time for the page to render
+        wait_time = 30 if element_found else 60  # Wait longer if no element was found
         logger.info(f"Waiting {wait_time} seconds for visualization to render...")
-        await asyncio.sleep(wait_time)
         
-        # Take screenshot
+        # Wait in smaller increments, checking for changes on the page
+        chunks = 10
+        for i in range(chunks):
+            await asyncio.sleep(wait_time / chunks)
+            try:
+                # Check if page has changed by looking at DOM size
+                dom_size = driver.execute_script("return document.documentElement.outerHTML.length")
+                logger.info(f"DOM size checkpoint {i+1}/{chunks}: {dom_size} bytes")
+            except Exception:
+                pass
+        
+        # 4. Take screenshot with full page size
         timestamp = int(time.time())
         screenshot_path = f"bubblemap_{contract_address}_{timestamp}.png"
         
-        # Scroll to ensure visualization is in view
+        # Get page dimensions and set window size accordingly
         try:
-            driver.execute_script("window.scrollTo(0, 200)")
-            await asyncio.sleep(2)  # Short pause after scrolling
+            width = driver.execute_script("return Math.max(document.body.scrollWidth, document.documentElement.scrollWidth);")
+            height = driver.execute_script("return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);")
+            driver.set_window_size(width, height)
+            logger.info(f"Adjusted window size to {width}x{height}")
         except Exception as e:
-            logger.warning(f"Scroll error: {e}")
+            logger.warning(f"Could not adjust window size: {e}")
         
+        # Final scroll to visualization area (typically in the middle of the page)
+        try:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.4);")
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.warning(f"Final scroll error: {e}")
+        
+        # Take screenshot
         driver.save_screenshot(screenshot_path)
         logger.info(f"Screenshot saved: {screenshot_path}")
         
-        # Check if screenshot actually contains content
+        # 5. Validate screenshot content
         try:
             img = Image.open(screenshot_path)
-            
-            # Simple check: if image is mostly white/blank
-            white_threshold = 0.95
             width, height = img.size
-            white_count = 0
             
-            for x in range(0, width, 10):  # Sample every 10 pixels
-                for y in range(0, height, 10):
+            # Check if image is mostly white/blank
+            white_threshold = 0.90
+            sample_rate = 10  # Check every 10 pixels
+            white_count = 0
+            sample_count = 0
+            
+            for x in range(0, width, sample_rate):
+                for y in range(0, height, sample_rate):
                     r, g, b = img.getpixel((x, y))[:3]
                     if r > 240 and g > 240 and b > 240:
                         white_count += 1
+                    sample_count += 1
             
-            white_ratio = white_count / ((width // 10) * (height // 10))
+            white_ratio = white_count / sample_count if sample_count > 0 else 1
+            logger.info(f"Screenshot white ratio: {white_ratio:.2f} (threshold: {white_threshold})")
+            
             if white_ratio > white_threshold:
-                logger.warning(f"Screenshot appears to be mostly blank (white ratio: {white_ratio})")
+                logger.warning(f"Screenshot appears to be mostly blank (white ratio: {white_ratio:.2f})")
                 raise Exception("Screenshot appears to be empty or mostly white")
-                
         except Exception as e:
             logger.warning(f"Screenshot validation error: {e}")
+            raise
             
         return screenshot_path
         
