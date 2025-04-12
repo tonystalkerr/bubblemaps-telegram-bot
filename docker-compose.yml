@@ -1,0 +1,9 @@
+version: '3'
+services:
+  bot:
+    build: .
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+    volumes:
+      - /dev/shm:/dev/shm
+    shm_size: '2g'
