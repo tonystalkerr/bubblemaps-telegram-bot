@@ -132,11 +132,7 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         driver_path = ChromeDriverManager().install()
         
         # Construct correct path to chromedriver binary
-        chrome_driver_binary = os.path.join(
-            driver_path,
-            'chromedriver-linux64',
-            'chromedriver'
-        )
+        chrome_driver_binary = ChromeDriverManager().install()
         
         # Verify the binary exists
         if not os.path.exists(chrome_driver_binary):
