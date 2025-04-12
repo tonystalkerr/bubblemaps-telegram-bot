@@ -155,11 +155,12 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
         driver.get(url)
-        logger.info("Waiting for 'bubblemaps-canvas' element to be present...")
-        WebDriverWait(driver, 60).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
+        logger.info("Page loaded, waiting for 'bubblemaps-canvas' element...")
+        element = WebDriverWait(driver, 90).until(
+            EC.visibility_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
         )
-        logger.info("Element found, waiting for visualization to render...")
+        logger.info(f"Element found: {element}")
+        logger.info("Waiting for visualization to render...")
         await asyncio.sleep(10)  # Wait for rendering
         timestamp = int(time.time())
         screenshot_path = f"bubblemap_{contract_address}_{timestamp}.png"
@@ -279,7 +280,7 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         analysis += f"\n🔗 View on Bubblemaps: {BUBBLEMAPS_APP_URL}/{chain}/token/{addr}"
         
         try:
-            screenshot_path = await asyncio.wait_for(screenshot_task, timeout=60)
+            screenshot_path = await asyncio.wait_for(screenshot_task, timeout=90)
             await update.message.reply_photo(
                 photo=open(screenshot_path, 'rb'),
                 caption=analysis
@@ -288,12 +289,12 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         except asyncio.TimeoutError:
             logger.error("Screenshot capture timed out")
             await update.message.reply_text(
-                text=f"⚠️ Could not generate bubble map visualization\n\n{analysis}"
+                text=f"⚠️ Screenshot generation timed out\n\n{analysis}"
             )
         except Exception as e:
             logger.error(f"Screenshot error: {e}", exc_info=True)
             await update.message.reply_text(
-                text=f"⚠️ Could not generate bubble map visualization\n\n{analysis}"
+                text=f"⚠️ Failed to generate screenshot: {str(e)}\n\n{analysis}"
             )
         
         await processing_message.delete()
