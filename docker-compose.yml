@@ -7,3 +7,10 @@ services:
     volumes:
       - /dev/shm:/dev/shm
     shm_size: '2g'
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
