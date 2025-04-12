@@ -131,8 +131,22 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         # Get ChromeDriver path using webdriver-manager
         driver_path = ChromeDriverManager().install()
         
+        # Construct correct path to chromedriver binary
+        chrome_driver_binary = os.path.join(
+            driver_path,
+            'chromedriver-linux64',
+            'chromedriver'
+        )
+        
+        # Verify the binary exists
+        if not os.path.exists(chrome_driver_binary):
+            raise FileNotFoundError(f"ChromeDriver binary not found at {chrome_driver_binary}")
+
+        # Set executable permissions
+        os.chmod(chrome_driver_binary, 0o755)
+        
         # Set up service with explicit ChromeDriver path
-        service = Service(executable_path=driver_path)
+        service = Service(executable_path=chrome_driver_binary)
         
         # Initialize Chrome with managed driver
         driver = webdriver.Chrome(service=service, options=options)
@@ -143,29 +157,39 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         driver.get(url)
         logger.info("Waiting for page to load...")
         
-        # Wait for visualization elements
+        # Wait for visualization elements with enhanced detection
         try:
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
-            )
-            # Additional render time
-            await asyncio.sleep(10)
+            WebDriverWait(driver, 25).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "canvas.bubblemaps-canvas"))
+            # Additional render time for complex visualizations
+            await asyncio.sleep(12)
         except Exception as e:
-            logger.warning(f"Timeout waiting for elements: {e}")
-            # Scroll to trigger rendering
+            logger.warning(f"Element detection failed: {e}")
+            # Alternative detection strategy
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body")))
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            await asyncio.sleep(15)
+            await asyncio.sleep(18)
 
+        # Ensure directory exists for screenshots
+        os.makedirs('screenshots', exist_ok=True)
+        
         # Save the bubble map as an image
         timestamp = int(time.time())
-        screenshot_path = f"bubblemap_{contract_address}_{timestamp}.png"
-        logger.info(f"Taking screenshot and saving to {screenshot_path}")
-        driver.save_screenshot(screenshot_path)
-        logger.info("Screenshot saved successfully")
+        screenshot_path = f"screenshots/bubblemap_{contract_address}_{timestamp}.png"
+        
+        # Take screenshot with quality checks
+        for attempt in range(3):
+            driver.save_screenshot(screenshot_path)
+            if os.path.getsize(screenshot_path) > 1024:  # Minimum file size check
+                break
+            await asyncio.sleep(5)
+        
+        logger.info(f"Screenshot saved to {screenshot_path}")
         return screenshot_path
         
     except Exception as e:
-        logger.error(f"Error during screenshot capture: {e}")
+        logger.error(f"Screenshot capture failed: {str(e)}")
         raise
     finally:
         if driver:
