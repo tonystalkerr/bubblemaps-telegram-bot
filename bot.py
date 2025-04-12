@@ -114,9 +114,7 @@ async def get_token_info(addr: str, chain: str = 'eth') -> dict:
         except Exception as e:
             logger.error(f"Token info error: {e}")
             return None
-
 async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
-    """Capture Bubblemaps visualization using headless Chrome"""
     options = Options()
     options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
@@ -129,9 +127,11 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     try:
         logger.info("Initializing ChromeDriver...")
         
-        # Get matching ChromeDriver version
+        # Get Chrome version
         chrome_version = subprocess.getoutput('google-chrome --version').split()[-1]
-        driver_path = ChromeDriverManager(version=chrome_version).install()
+        
+        # Install matching ChromeDriver
+        driver_path = ChromeDriverManager().install(version=chrome_version)
 
         # Find actual chromedriver executable
         possible_paths = [
