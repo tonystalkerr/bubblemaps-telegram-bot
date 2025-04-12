@@ -1,13 +1,7 @@
 FROM python:3.12-slim
 
-# Install Chrome and dependencies with improved font support
+# Install system dependencies and Chrome
 RUN apt-get update && apt-get install -y \
-    chromium \
-    chromium-driver \
-    libgbm-dev \
-    libxss1 \
-    libnss3 \
-    libasound2
     wget \
     gnupg \
     curl \
@@ -34,12 +28,10 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 \
     libxrandr2 \
     xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Chrome
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
-    && apt-get update && apt-get install -y google-chrome-stable \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up working directory
@@ -52,13 +44,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Create directory for temp files if doesn't exist
+# Create directory for temp files
 RUN mkdir -p /app/temp
 
 # Set ENV variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DISPLAY=:99
+ENV CHROME_BIN=/usr/bin/google-chrome
+ENV CHROME_PATH=/usr/lib/chromium/
 
-# Run the bot
-CMD ["python", "bot.py"]
+# Run Xvfb and the bot
+CMD Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
+    python bot.py
