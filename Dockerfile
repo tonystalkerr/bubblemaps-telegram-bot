@@ -28,32 +28,34 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 \
     libxrandr2 \
     xdg-utils \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ChromeDriver dependencies
+RUN apt-get update && apt-get install -y \
+    libnss3-dev \
+    libgdk-pixbuf2.0-dev \
+    libgtk-3-dev \
+    libxss-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
 COPY . .
 
-# Create directory for temp files
-RUN mkdir -p /app/temp
-
-# Set ENV variables
+# Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DISPLAY=:99
-ENV CHROME_BIN=/usr/bin/google-chrome
-ENV CHROME_PATH=/usr/lib/chromium/
+ENV GOOGLE_CHROME_BIN=/usr/bin/google-chrome
 
-# Run Xvfb and the bot
 CMD Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
     python bot.py
