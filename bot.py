@@ -1,198 +1,137 @@
-# bot.py
-import os
-import sys
 import logging
-import asyncio
-import time
-from datetime import datetime
-from dotenv import load_dotenv
+import os
+import tempfile
+from typing import Optional
+
+import httpx
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
-import aiohttp
 from webdriver_manager.chrome import ChromeDriverManager
 
-# Load environment variables
-load_dotenv()
+# === CONFIG ===
+BOT_TOKEN = os.environ.get("TG_BUBBLEMAP_BOT_TOKEN")
+BUBBLEMAPS_API_URL = "https://api.bubblemaps.io/bubbles"
+BUBBLEMAPS_APP_URL = "https://app.bubblemaps.io"
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# === LOGGING ===
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# API configuration
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-BUBBLEMAPS_API_URL = "https://api-legacy.bubblemaps.io"
-BUBBLEMAPS_APP_URL = "https://app.bubblemaps.io"
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+# === Screenshot capture ===
+async def capture_bubblemap(token_address: str, chain: str) -> str:
+    logger.info(f"Capturing for {chain}/{token_address}")
+    url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{token_address}"
 
-CHAIN_TO_PLATFORM = {
-    'eth': 'ethereum',
-    'bsc': 'binance-smart-chain',
-    'ftm': 'fantom',
-    'avax': 'avalanche',
-    'poly': 'polygon-pos',
-    'arbi': 'arbitrum-one',
-    'base': 'base'
-}
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--window-size=1920,1080")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Welcome! Send me a token contract address to analyze.\n"
-        "Example: `0x1234... eth`"
-    )
+    driver_path = ChromeDriverManager().install()
 
-def format_number(value, decimal_places=2, is_price=False, suffix=''):
-    if value is None:
-        return 'N/A'
+    # Fix: Locate actual chromedriver binary
+    if not os.access(driver_path, os.X_OK):
+        for root, _, files in os.walk(driver_path):
+            for file in files:
+                if "chromedriver" in file and os.access(os.path.join(root, file), os.X_OK):
+                    driver_path = os.path.join(root, file)
+                    break
+
+    service = Service(executable_path=driver_path)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver.get(url)
+
+    await asyncio.sleep(6)  # let the bubbles load
+
+    # Screenshot and cleanup
+    _, path = tempfile.mkstemp(suffix=".png")
+    driver.save_screenshot(path)
+    driver.quit()
+
+    return path
+
+# === Metadata API Fetch ===
+async def fetch_token_metadata(token_address: str, chain: str) -> Optional[dict]:
+    url = f"{BUBBLEMAPS_API_URL}/{chain}/{token_address}"
     try:
-        if is_price and value < 0.01:
-            return f"${value:,.8f}{suffix}"
-        return f"${value:,.{decimal_places}f}{suffix}"
-    except Exception:
-        return 'N/A'
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"API error: {response.status_code} {response.text}")
+    except Exception as e:
+        logger.warning(f"HTTP fetch error: {e}")
+    return None
 
-async def get_token_info(addr: str, chain: str):
-    async with aiohttp.ClientSession() as session:
-        try:
-            meta_url = f"{BUBBLEMAPS_API_URL}/map-metadata?token={addr}&chain={chain}"
-            data_url = f"{BUBBLEMAPS_API_URL}/map-data?token={addr}&chain={chain}"
-            meta_resp = await session.get(meta_url)
-            data_resp = await session.get(data_url)
-            if meta_resp.status != 200 or data_resp.status != 200:
-                return None
-            meta = await meta_resp.json()
-            data = await data_resp.json()
-            if meta.get("status") != "OK":
-                return None
-            return {
-                "full_name": data.get("full_name", "Unknown"),
-                "symbol": data.get("symbol", "N/A"),
-                "decentralization_score": meta.get("decentralisation_score"),
-                "percent_in_cexs": meta.get("identified_supply", {}).get("percent_in_cexs"),
-                "percent_in_contracts": meta.get("identified_supply", {}).get("percent_in_contracts"),
-                "last_update": meta.get("dt_update"),
-                "is_nft": data.get("is_X721", False),
-                "top_holders": data.get("nodes", [])[:5]
-            }
-        except Exception as e:
-            logger.error(f"Token Info Error: {e}")
-            return None
-
-async def get_market_data(addr: str, chain: str):
-    platform = CHAIN_TO_PLATFORM.get(chain)
-    if not platform:
-        return {}
-    url = f"{COINGECKO_API_URL}/coins/{platform}/contract/{addr}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            resp = await session.get(url)
-            if resp.status != 200:
-                return {}
-            data = await resp.json()
-            m = data.get("market_data", {})
-            return {
-                "price": m.get("current_price", {}).get("usd"),
-                "market_cap": m.get("market_cap", {}).get("usd"),
-                "volume_24h": m.get("total_volume", {}).get("usd"),
-                "price_change_24h": m.get("price_change_percentage_24h")
-            }
-        except Exception as e:
-            logger.error(f"Market Data Error: {e}")
-            return {}
-
-async def capture_bubblemap(addr: str, chain: str):
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--window-size=1920,1080")
-    driver = None
+# === Telegram handler ===
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{addr}"
-        driver.get(url)
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "canvas.bubblemaps-canvas"))
-        )
-        await asyncio.sleep(12)
-        os.makedirs("screenshots", exist_ok=True)
-        path = f"screenshots/{addr}_{int(time.time())}.png"
-        driver.save_screenshot(path)
-        return path
-    finally:
-        if driver:
-            driver.quit()
-
-async def handle_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 Analyzing contract...")
-    try:
-        text = update.message.text.strip()
-        parts = text.split()
-        if len(parts) < 1 or not parts[0].startswith("0x"):
-            await msg.edit_text("❌ Invalid contract format")
-            return
-        addr = parts[0].lower()
-        chain = parts[1].lower() if len(parts) > 1 else "eth"
-        if chain not in CHAIN_TO_PLATFORM:
-            await msg.edit_text(f"❌ Unsupported chain: {chain}")
+        if not update.message or not update.message.text:
             return
 
-        token_info, market_data = await asyncio.gather(
-            get_token_info(addr, chain), get_market_data(addr, chain)
-        )
-        if not token_info:
-            await msg.edit_text("❌ Token not found or not supported.")
+        parts = update.message.text.strip().split()
+        if len(parts) == 1:
+            addr = parts[0]
+            chain = "ethereum"
+        elif len(parts) == 2:
+            addr, chain = parts
+        else:
+            await update.message.reply_text("Usage:\n`<token_address>` or `<token_address> <chain>`", parse_mode="Markdown")
+            return
+
+        # Clean address
+        addr = addr.lower().strip()
+        if not addr.startswith("0x") or len(addr) != 42:
+            await update.message.reply_text("Invalid Ethereum address.", parse_mode="Markdown")
+            return
+
+        logger.info(f"User query: {addr} on {chain}")
+
+        # Fetch metadata
+        data = await fetch_token_metadata(addr, chain)
+        if not data:
+            await update.message.reply_text("Token not found on Bubblemaps.", parse_mode="Markdown")
             return
 
         text_lines = [
-            f"📊 {'NFT' if token_info['is_nft'] else 'Token'} Analysis",
-            f"Name: {token_info['full_name']} ({token_info['symbol']})",
-            f"Price: {format_number(market_data.get('price'), is_price=True)}",
-            f"Market Cap: {format_number(market_data.get('market_cap'))}",
-            f"24h Volume: {format_number(market_data.get('volume_24h'))}",
-            f"24h Change: {format_number(market_data.get('price_change_24h'), suffix='%')}",
-            f"Decentralization Score: {token_info['decentralization_score']}/100",
-            f"In CEXs: {token_info['percent_in_cexs']}%",
-            f"In Contracts: {token_info['percent_in_contracts']}%",
-            "Top Holders:"
+            f"*🪙 Name:* `{data.get('name')}`",
+            f"*🔗 Address:* `{addr}`",
+            f"*🌐 Chain:* `{chain}`",
+            f"*📊 Rank:* `{data.get('rank')}`",
+            f"*👥 Clusters:* `{data.get('clusters')}`",
+            f"*🔗 [View on Bubblemaps]({BUBBLEMAPS_APP_URL}/{chain}/token/{addr})*"
         ]
-        for idx, h in enumerate(token_info["top_holders"], 1):
-            tag = "📜" if h.get("is_contract") else "👤"
-            text_lines.append(f"{idx}. {tag} {h.get('name')} - {h.get('percentage'):.2f}%")
 
+        # Try screenshot
         try:
             path = await capture_bubblemap(addr, chain)
             with open(path, "rb") as f:
-                await update.message.reply_photo(photo=f, caption="\n".join(text_lines))
+                await update.message.reply_photo(
+                    photo=f,
+                    caption="\n".join(text_lines),
+                    parse_mode="Markdown"
+                )
             os.remove(path)
         except Exception as e:
             logger.warning(f"Screenshot failed: {e}")
-            await update.message.reply_text("\n".join(text_lines))
+            text_lines.append("❌ Screenshot not available.")
+            await update.message.reply_text("\n".join(text_lines), parse_mode="Markdown")
 
-        await msg.delete()
     except Exception as e:
-        logger.error(f"Processing failed: {e}")
-        await msg.edit_text("❌ An error occurred.")
+        logger.exception("Unexpected error")
+        await update.message.reply_text("⚠️ Something went wrong. Try again later.", parse_mode="Markdown")
 
-def main():
-    if not TELEGRAM_TOKEN:
-        logger.error("Missing TELEGRAM_TOKEN in .env")
-        sys.exit(1)
-
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_contract))
-    logger.info("Bot running...")
-    app.run_polling()
-
+# === Bot Init ===
 if __name__ == "__main__":
-    main()
+    if not BOT_TOKEN:
+        raise ValueError("Set TG_BUBBLEMAP_BOT_TOKEN in environment")
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling()
