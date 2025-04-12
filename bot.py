@@ -12,6 +12,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
 import aiohttp
 import time
 from webdriver_manager.chrome import ChromeDriverManager
@@ -151,7 +152,8 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     options.add_argument('--window-size=1920,1080')
     
     try:
-        driver = webdriver.Chrome(executable_path=ChromeDriverManager().install(), options=options)
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
         driver.get(url)
