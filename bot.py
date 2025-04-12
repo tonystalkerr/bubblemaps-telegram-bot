@@ -16,6 +16,7 @@ from selenium.webdriver.chrome.service import Service
 import aiohttp
 import time
 from webdriver_manager.chrome import ChromeDriverManager
+import subprocess
 
 # Configuration
 load_dotenv()
@@ -153,20 +154,25 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     
     try:
         driver_path = ChromeDriverManager().install()
-        # Ensure we use the actual chromedriver binary
         driver_dir = os.path.dirname(driver_path)
         driver_path = os.path.join(driver_dir, 'chromedriver')
         if not os.path.isfile(driver_path) or not os.access(driver_path, os.X_OK):
-            # Fallback to find the executable in the directory
             for file in os.listdir(driver_dir):
                 if file.startswith('chromedriver') and os.access(os.path.join(driver_dir, file), os.X_OK):
                     driver_path = os.path.join(driver_dir, file)
                     break
-            # If still not executable, set permissions
             if not os.access(driver_path, os.X_OK):
                 logger.warning(f"Setting executable permissions for {driver_path}")
-                os.chmod(driver_path, 0o755)  # Set read, write, execute for owner, read/execute for others
-        logger.info(f"Using ChromeDriver path: {driver_path}")
+                os.chmod(driver_path, 0o755)
+        logger.info(f"Using ChromeDriver path: {driver_path} with permissions: {oct(os.stat(driver_path).st_mode)[-3:]}")
+        
+        # Verify chromedriver version
+        result = subprocess.run([driver_path, '--version'], capture_output=True, text=True)
+        logger.info(f"ChromeDriver version output: {result.stdout}")
+        if result.returncode != 0:
+            logger.error(f"ChromeDriver failed to start: {result.stderr}")
+            raise Exception("ChromeDriver version check failed")
+        
         service = Service(driver_path)
         driver = webdriver.Chrome(service=service, options=options)
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
