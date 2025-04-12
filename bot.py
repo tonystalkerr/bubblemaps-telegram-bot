@@ -161,6 +161,7 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         try:
             WebDriverWait(driver, 25).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "canvas.bubblemaps-canvas"))
+            )
             # Additional render time for complex visualizations
             await asyncio.sleep(12)
         except Exception as e:
