@@ -17,6 +17,7 @@ import aiohttp
 import time
 from webdriver_manager.chrome import ChromeDriverManager
 import subprocess
+from PIL import Image
 
 # Configuration
 load_dotenv()
@@ -148,48 +149,101 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     options = Options()
     options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
-    options.add_argument('--disable-shm-usage')
+    options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-infobars')
+    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36')
     
     try:
+        logger.info("Setting up Chrome driver...")
         driver_path = ChromeDriverManager().install()
-        driver_dir = os.path.dirname(driver_path)
-        driver_path = os.path.join(driver_dir, 'chromedriver')
-        if not os.path.isfile(driver_path) or not os.access(driver_path, os.X_OK):
-            for file in os.listdir(driver_dir):
-                if file.startswith('chromedriver') and os.access(os.path.join(driver_dir, file), os.X_OK):
-                    driver_path = os.path.join(driver_dir, file)
-                    break
-            if not os.access(driver_path, os.X_OK):
-                logger.warning(f"Setting executable permissions for {driver_path}")
-                os.chmod(driver_path, 0o755)
-        logger.info(f"Using ChromeDriver path: {driver_path} with permissions: {oct(os.stat(driver_path).st_mode)[-3:]}")
-        
-        # Verify chromedriver version
-        result = subprocess.run([driver_path, '--version'], capture_output=True, text=True)
-        logger.info(f"ChromeDriver version output: {result.stdout}")
-        if result.returncode != 0:
-            logger.error(f"ChromeDriver failed to start: {result.stderr}")
-            raise Exception("ChromeDriver version check failed")
-        
         service = Service(driver_path)
         driver = webdriver.Chrome(service=service, options=options)
+        
+        # Set a page load timeout
+        driver.set_page_load_timeout(60)
+        
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
-        driver.get(url)
-        logger.info("Page loaded, waiting for 'bubblemaps-canvas' element...")
-        element = WebDriverWait(driver, 90).until(
-            EC.visibility_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
-        )
-        logger.info(f"Element found: {element}")
-        logger.info("Waiting for visualization to render...")
-        await asyncio.sleep(10)  # Wait for rendering
+        
+        try:
+            driver.get(url)
+        except Exception as e:
+            logger.error(f"Page load error: {e}")
+            # Take screenshot anyway - it might have loaded enough elements
+        
+        logger.info("Checking for visualization elements...")
+        
+        # Try multiple selectors in case the website structure changed
+        possible_selectors = [
+            "bubblemaps-canvas",  # Original selector
+            "canvas",
+            ".visualization-container",
+            "#visualization",
+            ".token-visualization"
+        ]
+        
+        # Wait for any of the possible elements to appear
+        element_found = False
+        for selector in possible_selectors:
+            try:
+                logger.info(f"Looking for element with selector: {selector}")
+                selector_type = By.CLASS_NAME if selector.startswith(".") or not selector.startswith(("#", ".")) else By.CSS_SELECTOR
+                element = WebDriverWait(driver, 30).until(
+                    EC.visibility_of_element_located((selector_type, selector.lstrip(".#")))
+                )
+                logger.info(f"Found element with selector: {selector}")
+                element_found = True
+                break
+            except Exception as e:
+                logger.warning(f"Element with selector '{selector}' not found: {e}")
+        
+        # Even if no specific element is found, wait a bit and take a screenshot anyway
+        wait_time = 20 if element_found else 45
+        logger.info(f"Waiting {wait_time} seconds for visualization to render...")
+        await asyncio.sleep(wait_time)
+        
+        # Take screenshot
         timestamp = int(time.time())
         screenshot_path = f"bubblemap_{contract_address}_{timestamp}.png"
+        
+        # Scroll to ensure visualization is in view
+        try:
+            driver.execute_script("window.scrollTo(0, 200)")
+            await asyncio.sleep(2)  # Short pause after scrolling
+        except Exception as e:
+            logger.warning(f"Scroll error: {e}")
+        
         driver.save_screenshot(screenshot_path)
         logger.info(f"Screenshot saved: {screenshot_path}")
+        
+        # Check if screenshot actually contains content
+        try:
+            img = Image.open(screenshot_path)
+            
+            # Simple check: if image is mostly white/blank
+            white_threshold = 0.95
+            width, height = img.size
+            white_count = 0
+            
+            for x in range(0, width, 10):  # Sample every 10 pixels
+                for y in range(0, height, 10):
+                    r, g, b = img.getpixel((x, y))[:3]
+                    if r > 240 and g > 240 and b > 240:
+                        white_count += 1
+            
+            white_ratio = white_count / ((width // 10) * (height // 10))
+            if white_ratio > white_threshold:
+                logger.warning(f"Screenshot appears to be mostly blank (white ratio: {white_ratio})")
+                raise Exception("Screenshot appears to be empty or mostly white")
+                
+        except Exception as e:
+            logger.warning(f"Screenshot validation error: {e}")
+            
         return screenshot_path
+        
     except Exception as e:
         logger.error(f"Error during screenshot capture: {e}", exc_info=True)
         raise
@@ -304,20 +358,23 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         
         try:
             screenshot_path = await asyncio.wait_for(screenshot_task, timeout=90)
-            await update.message.reply_photo(
-                photo=open(screenshot_path, 'rb'),
-                caption=analysis
-            )
+            with open(screenshot_path, 'rb') as photo_file:
+                await update.message.reply_photo(
+                    photo=photo_file,
+                    caption=analysis
+                )
             os.remove(screenshot_path)
+            logger.info(f"Successfully sent screenshot and removed temp file: {screenshot_path}")
         except asyncio.TimeoutError:
             logger.error("Screenshot capture timed out")
             await update.message.reply_text(
-                text=f"⚠️ Screenshot generation timed out\n\n{analysis}"
+                text=f"⚠️ Visualization generation timed out. Visit the link below to view the bubble map.\n\n{analysis}"
             )
         except Exception as e:
             logger.error(f"Screenshot error: {e}", exc_info=True)
+            bubblemap_link = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{addr}"
             await update.message.reply_text(
-                text=f"⚠️ Failed to generate screenshot: {str(e)}\n\n{analysis}"
+                text=f"⚠️ Unable to generate visualization. You can view it directly here: {bubblemap_link}\n\n{analysis}"
             )
         
         await processing_message.delete()
