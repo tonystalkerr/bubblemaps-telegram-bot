@@ -13,7 +13,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # === CONFIG ===
-BOT_TOKEN = os.environ.get("TG_BUBBLEMAP_BOT_TOKEN")
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 BUBBLEMAPS_API_URL = "https://api.bubblemaps.io/bubbles"
 BUBBLEMAPS_APP_URL = "https://app.bubblemaps.io"
 
