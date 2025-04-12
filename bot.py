@@ -154,13 +154,17 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     try:
         driver_path = ChromeDriverManager().install()
         driver_dir = os.path.dirname(driver_path)
-        # Find the correct chromedriver binary in the directory
+        # Find and validate the chromedriver binary in the directory
         driver_path = None
         for file in os.listdir(driver_dir):
             full_path = os.path.join(driver_dir, file)
-            if os.path.isfile(full_path) and file.startswith('chromedriver') and os.access(full_path, os.X_OK):
-                driver_path = full_path
-                break
+            if os.path.isfile(full_path) and file.startswith('chromedriver'):
+                if not os.access(full_path, os.X_OK):
+                    logger.warning(f"Setting executable permissions for {full_path}")
+                    os.chmod(full_path, 0o755)
+                if os.access(full_path, os.X_OK):
+                    driver_path = full_path
+                    break
         if driver_path is None:
             raise FileNotFoundError(f"No executable chromedriver found in {driver_dir}")
         logger.info(f"Using ChromeDriver path: {driver_path}")
