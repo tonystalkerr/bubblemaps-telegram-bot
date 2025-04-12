@@ -43,10 +43,8 @@ def debug_api_response(name, data, level="info"):
     """Log API response data in a readable format"""
     logger.info(f"--- {name} API Response ---")
     if level == "debug":
-        # For full data dumps
         logger.info(f"Full response: {json.dumps(data, indent=2)}")
     elif isinstance(data, dict):
-        # For key information
         for key, value in data.items():
             if isinstance(value, dict):
                 logger.info(f"{key}: {json.dumps(value, indent=2)}")
@@ -90,7 +88,6 @@ async def get_market_data(addr: str, chain: str) -> dict:
                     'volume_24h': market.get('total_volume', {}).get('usd'),
                     'price_change_24h': market.get('price_change_percentage_24h')
                 }
-                
                 return result
                 
         except asyncio.TimeoutError:
@@ -106,7 +103,6 @@ async def get_token_info(addr: str, chain: str = 'eth') -> dict:
     
     async with aiohttp.ClientSession() as session:
         try:
-            # Get metadata
             meta_url = f"{BUBBLEMAPS_API_URL}/map-metadata?token={addr}&chain={chain}"
             async with session.get(meta_url, timeout=15) as resp:
                 if resp.status != 200:
@@ -117,7 +113,6 @@ async def get_token_info(addr: str, chain: str = 'eth') -> dict:
                     logger.warning(f"Bubblemaps metadata status: {meta.get('status')}, message: {meta.get('message')}")
                     return None
             
-            # Get data
             data_url = f"{BUBBLEMAPS_API_URL}/map-data?token={addr}&chain={chain}"
             async with session.get(data_url, timeout=15) as resp:
                 if resp.status != 200:
@@ -125,7 +120,6 @@ async def get_token_info(addr: str, chain: str = 'eth') -> dict:
                     return None
                 data = await resp.json()
             
-            # Extract relevant fields
             result = {
                 'full_name': data.get('full_name', 'Unknown'),
                 'symbol': data.get('symbol', 'N/A'),
@@ -136,7 +130,6 @@ async def get_token_info(addr: str, chain: str = 'eth') -> dict:
                 'is_nft': data.get('is_X721', False),
                 'top_holders': data.get('nodes', [])[:5],
             }
-            
             return result
         
         except Exception as e:
@@ -148,21 +141,34 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
     options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
+    options.add_argument('--disable-gpu')
     options.add_argument('--disable-extensions')
-    options.add_argument('--disable-infobars')
-    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36')
-    
+
+    driver = None
     try:
         logger.info("Setting up Chrome driver...")
+        
+        # Get and verify chromedriver path
         driver_path = ChromeDriverManager().install()
-        service = Service(driver_path)
+        
+        # Handle ChromeDriver 115+ directory structure
+        if os.path.isdir(driver_path):
+            new_path = os.path.join(driver_path, 'chromedriver-linux64', 'chromedriver')
+            if os.path.exists(new_path):
+                driver_path = new_path
+        
+        if not os.path.isfile(driver_path):
+            raise FileNotFoundError(f"ChromeDriver not found at {driver_path}")
+        
+        # Set executable permissions
+        os.chmod(driver_path, 0o755)
+        logger.info(f"Using ChromeDriver at: {driver_path}")
+
+        service = Service(executable_path=driver_path)
         driver = webdriver.Chrome(service=service, options=options)
-        
-        # Set a page load timeout
+
         driver.set_page_load_timeout(60)
-        
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
         
@@ -170,17 +176,11 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
             driver.get(url)
         except Exception as e:
             logger.error(f"Page load error: {e}")
-            # Attempt screenshot even if page load fails partially
-        
-        logger.info("Checking for visualization elements...")
-        
-        # Possible selectors with fallback
+
         possible_selectors = [
             (By.CLASS_NAME, "bubblemaps-canvas"),
             (By.TAG_NAME, "canvas"),
-            (By.CSS_SELECTOR, ".visualization-container"),
-            (By.ID, "visualization"),
-            (By.CSS_SELECTOR, ".token-visualization")
+            (By.CSS_SELECTOR, ".visualization-container")
         ]
         
         element_found = False
@@ -190,31 +190,25 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         while attempt <= max_attempts and not element_found:
             for selector_type, selector in possible_selectors:
                 try:
-                    logger.info(f"Attempt {attempt}: Looking for element with {selector_type} = {selector}")
                     element = WebDriverWait(driver, 30).until(
                         EC.visibility_of_element_located((selector_type, selector))
                     )
-                    logger.info(f"Found element with {selector_type} = {selector}")
                     element_found = True
                     break
                 except Exception as e:
-                    logger.warning(f"Attempt {attempt}: Element with {selector_type} = {selector} not found: {e}")
+                    logger.warning(f"Attempt {attempt}: Element not found: {e}")
             if not element_found:
-                await asyncio.sleep(10)  # Wait before retrying
+                await asyncio.sleep(10)
                 attempt += 1
-        
-        # Force JavaScript rendering if element not found
+
         if not element_found:
-            logger.info("No element found, forcing JavaScript render...")
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            await asyncio.sleep(15)  # Extra time for rendering
-        
-        # Take screenshot after waiting
+            await asyncio.sleep(15)
+
         wait_time = 20 if element_found else 45
-        logger.info(f"Waiting {wait_time} seconds for visualization to render...")
+        logger.info(f"Waiting {wait_time} seconds for rendering...")
         await asyncio.sleep(wait_time)
-        
-        # Scroll to ensure content is in view
+
         try:
             driver.execute_script("window.scrollTo(0, 200)")
             await asyncio.sleep(2)
@@ -226,7 +220,6 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         driver.save_screenshot(screenshot_path)
         logger.info(f"Screenshot saved: {screenshot_path}")
         
-        # Validate screenshot content
         try:
             img = Image.open(screenshot_path)
             white_threshold = 0.95
@@ -239,8 +232,7 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
                         white_count += 1
             white_ratio = white_count / ((width // 10) * (height // 10))
             if white_ratio > white_threshold:
-                logger.warning(f"Screenshot appears mostly blank (white ratio: {white_ratio})")
-                raise Exception("Screenshot appears empty or mostly white")
+                raise Exception("Screenshot appears mostly blank")
         except Exception as e:
             logger.warning(f"Screenshot validation error: {e}")
         
@@ -250,7 +242,7 @@ async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
         logger.error(f"Error during screenshot capture: {e}", exc_info=True)
         raise
     finally:
-        if 'driver' in locals():
+        if driver:
             driver.quit()
 
 async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,64 +290,35 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         analysis = f"📊 {token_type} Analysis for {full_name} ({symbol})\n\n"
         
         if market_data:
-            price = market_data.get('price')
-            market_cap = market_data.get('market_cap')
-            volume_24h = market_data.get('volume_24h')
-            price_change_24h = market_data.get('price_change_24h')
-            
             analysis += "Market Data:\n"
-            analysis += f"- Price: {format_number(price, is_price=True)}\n"
-            analysis += f"- Market Cap: {format_number(market_cap)}\n"
-            analysis += f"- 24h Volume: {format_number(volume_24h)}\n"
-            if price_change_24h is not None:
-                analysis += f"- 24h Change: {price_change_24h:+.2f}%\n"
-            else:
-                analysis += "- 24h Change: N/A\n"
+            analysis += f"- Price: {format_number(market_data.get('price'), is_price=True)}\n"
+            analysis += f"- Market Cap: {format_number(market_data.get('market_cap'))}\n"
+            analysis += f"- 24h Volume: {format_number(market_data.get('volume_24h'))}\n"
+            price_change = market_data.get('price_change_24h')
+            analysis += f"- 24h Change: {price_change:+.2f}%\n" if price_change else "- 24h Change: N/A\n"
             analysis += "\n"
         else:
             analysis += "Market Data: N/A\n\n"
         
-        decentralization_score = token_info.get('decentralization_score')
-        percent_in_cexs = token_info.get('percent_in_cexs')
-        percent_in_contracts = token_info.get('percent_in_contracts')
-        
         analysis += "Decentralization Metrics:\n"
-        if decentralization_score is not None:
-            analysis += f"- Score: {decentralization_score}/100\n"
-        else:
-            analysis += "- Score: N/A\n"
-        if percent_in_cexs is not None:
-            analysis += f"- Percent in CEXs: {percent_in_cexs:.1f}%\n"
-        else:
-            analysis += "- Percent in CEXs: N/A\n"
-        if percent_in_contracts is not None:
-            analysis += f"- Percent in Contracts: {percent_in_contracts:.1f}%\n"
-        else:
-            analysis += "- Percent in Contracts: N/A\n"
-        analysis += "\n"
+        decentralization_score = token_info.get('decentralization_score')
+        analysis += f"- Score: {decentralization_score}/100\n" if decentralization_score else "- Score: N/A\n"
+        analysis += f"- CEXs: {token_info.get('percent_in_cexs', 0):.1f}%\n"
+        analysis += f"- Contracts: {token_info.get('percent_in_contracts', 0):.1f}%\n\n"
         
         analysis += "Top 5 Holders:\n"
         top_holders = token_info.get('top_holders', [])
         if top_holders:
             for idx, holder in enumerate(top_holders, 1):
-                percentage = holder.get('percentage', 0)
-                amount = holder.get('amount', 0)
-                name = holder.get('name', 'Unknown')
-                address = holder.get('address', 'Unknown')
-                is_contract = holder.get('is_contract', False)
-                contract_status = '📜' if is_contract else '👤'
-                
                 analysis += (
-                    f"{idx}. {contract_status} {name}\n"
-                    f"   └ {address[:8]}...{address[-4:]}\n"
-                    f"   └ {percentage:.2f}% ({amount} tokens)\n"
+                    f"{idx}. {'📜' if holder.get('is_contract') else '👤'} {holder.get('name', 'Unknown')}\n"
+                    f"   └ {holder.get('address', 'Unknown')[:8]}...{holder.get('address', 'Unknown')[-4:]}\n"
+                    f"   └ {holder.get('percentage', 0):.2f}% ({holder.get('amount', 0)})\n"
                 )
         else:
             analysis += "No holder data available\n"
         
-        last_update = token_info.get('last_update')
-        analysis += f"\nLast Update: {last_update}\n"
-        
+        analysis += f"\nLast Update: {token_info.get('last_update')}\n"
         analysis += f"\n🔗 View on Bubblemaps: {BUBBLEMAPS_APP_URL}/{chain}/token/{addr}"
         
         try:
@@ -366,39 +329,25 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
                     caption=analysis
                 )
             os.remove(screenshot_path)
-            logger.info(f"Successfully sent screenshot and removed temp file: {screenshot_path}")
         except asyncio.TimeoutError:
-            logger.error("Screenshot capture timed out")
-            await update.message.reply_text(
-                text=f"⚠️ Visualization generation timed out. Visit the link below to view the bubble map.\n\n{analysis}"
-            )
+            await update.message.reply_text(f"⚠️ Visualization timeout\n\n{analysis}")
         except Exception as e:
-            logger.error(f"Screenshot error: {e}", exc_info=True)
-            bubblemap_link = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{addr}"
-            await update.message.reply_text(
-                text=f"⚠️ Unable to generate visualization. You can view it directly here: {bubblemap_link}\n\n{analysis}"
-            )
+            await update.message.reply_text(f"⚠️ Error generating image\n\n{analysis}")
         
         await processing_message.delete()
-        logger.info("Request processing completed successfully")
         
     except Exception as e:
-        logger.error(f"Error processing contract address: {e}", exc_info=True)
-        if 'processing_message' in locals():
-            await processing_message.edit_text("❌ An error occurred while processing your request. Please try again later.")
-        else:
-            await update.message.reply_text("❌ An error occurred while processing your request. Please try again later.")
+        logger.error(f"Error processing request: {e}", exc_info=True)
+        await processing_message.edit_text("❌ An error occurred. Please try again.")
 
 def format_number(value, decimal_places=2, is_price=False):
-    logger.info(f"Formatting number: {value}, is_price={is_price}")
     if value is None:
         return 'N/A'
     try:
         if is_price and value < 0.01:
             return f"${value:,.8f}"
         return f"${value:,.{decimal_places}f}"
-    except (TypeError, ValueError) as e:
-        logger.error(f"Error formatting number {value}: {e}")
+    except (TypeError, ValueError):
         return 'N/A'
 
 def main():
