@@ -2,6 +2,12 @@ FROM python:3.12-slim
 
 # Install Chrome and dependencies with improved font support
 RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    libgbm-dev \
+    libxss1 \
+    libnss3 \
+    libasound2
     wget \
     gnupg \
     curl \
