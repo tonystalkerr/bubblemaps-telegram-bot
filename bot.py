@@ -115,90 +115,61 @@ async def get_token_info(addr: str, chain: str = 'eth') -> dict:
             logger.error(f"Token info error: {e}")
             return None
 async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
+    """Takes a picture of the token's bubble map visualization from the website"""
+    # Set up Chrome options for headless mode
     options = Options()
     options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--window-size=1920,1080')
     options.add_argument('--disable-gpu')
-    options.add_argument('--disable-extensions')
-
+    options.add_argument('--window-size=1920,1080')
+    
     driver = None
     try:
-        logger.info("Initializing ChromeDriver...")
+        logger.info(f"Starting screenshot capture for {contract_address}")
         
-        # Get Chrome version
-        chrome_version = subprocess.getoutput('google-chrome --version').split()[-1]
+        # Get ChromeDriver path using webdriver-manager
+        driver_path = ChromeDriverManager().install()
         
-        # Install matching ChromeDriver
-        driver_path = ChromeDriverManager().install(version=chrome_version)
-
-        # Find actual chromedriver executable
-        possible_paths = [
-            os.path.join(driver_path, 'chromedriver'),
-            os.path.join(driver_path, 'chromedriver-linux64', 'chromedriver'),
-            os.path.join(driver_path, 'chromedriver-linux', 'chromedriver')
-        ]
-
-        valid_path = next((p for p in possible_paths if os.path.isfile(p)), None)
-        if not valid_path:
-            raise FileNotFoundError(f"ChromeDriver not found in {driver_path}")
-
-        os.chmod(valid_path, 0o755)
-        logger.info(f"Using ChromeDriver at: {valid_path}")
-
-        service = Service(executable_path=valid_path)
+        # Set up service with explicit ChromeDriver path
+        service = Service(executable_path=driver_path)
+        
+        # Initialize Chrome with managed driver
         driver = webdriver.Chrome(service=service, options=options)
-        driver.set_page_load_timeout(45)
-
+        
+        # Visit the token's page and wait for it to load
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
-        logger.info(f"Loading: {url}")
+        logger.info(f"Loading URL: {url}")
         driver.get(url)
-
+        logger.info("Waiting for page to load...")
+        
         # Wait for visualization elements
-        possible_selectors = [
-            (By.CLASS_NAME, "bubblemaps-canvas"),
-            (By.TAG_NAME, "canvas"),
-            (By.CSS_SELECTOR, ".visualization-container")
-        ]
-
-        element_found = False
-        for attempt in range(3):
-            for selector_type, selector in possible_selectors:
-                try:
-                    WebDriverWait(driver, 20).until(
-                        EC.visibility_of_element_located((selector_type, selector))
-                    )
-                    element_found = True
-                    break
-                except Exception:
-                    continue
-            if element_found:
-                break
+        try:
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
+            )
+            # Additional render time
             await asyncio.sleep(10)
+        except Exception as e:
+            logger.warning(f"Timeout waiting for elements: {e}")
+            # Scroll to trigger rendering
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            await asyncio.sleep(15)
 
-        # Final rendering wait
-        await asyncio.sleep(25 if element_found else 40)
-
-        # Capture screenshot
+        # Save the bubble map as an image
         timestamp = int(time.time())
         screenshot_path = f"bubblemap_{contract_address}_{timestamp}.png"
+        logger.info(f"Taking screenshot and saving to {screenshot_path}")
         driver.save_screenshot(screenshot_path)
-
-        # Validate screenshot content
-        with Image.open(screenshot_path) as img:
-            if img.getextrema() == ((0, 255), (0, 255), (0, 255)):
-                raise ValueError("Blank screenshot detected")
-
+        logger.info("Screenshot saved successfully")
         return screenshot_path
-
+        
     except Exception as e:
-        logger.error(f"Screenshot capture failed: {e}")
+        logger.error(f"Error during screenshot capture: {e}")
         raise
     finally:
         if driver:
             driver.quit()
-
 async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process user contract address input"""
     processing_msg = await update.message.reply_text("🔍 Analyzing contract...")
