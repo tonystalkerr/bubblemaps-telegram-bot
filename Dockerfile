@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Install system dependencies and Chrome
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -34,28 +34,10 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ChromeDriver dependencies
-RUN apt-get update && apt-get install -y \
-    libnss3-dev \
-    libgdk-pixbuf2.0-dev \
-    libgtk-3-dev \
-    libxss-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set up working directory
 WORKDIR /app
-
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
-
-# Environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV DISPLAY=:99
-ENV GOOGLE_CHROME_BIN=/usr/bin/google-chrome
 
 CMD Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
     python bot.py
