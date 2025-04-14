@@ -1,4 +1,4 @@
-# Bubblemaps Telegram Bot
+# Bubblemaps Telegram Bot- http://t.me/bubblemap_Tg_Bot
 
 A Telegram bot that provides detailed token analysis using Bubblemaps data. The bot generates bubble maps and provides comprehensive token information including market data, decentralization metrics, and holder analysis.
 
