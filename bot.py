@@ -26,9 +26,14 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 if not TELEGRAM_TOKEN:
     raise ValueError("Please set TELEGRAM_TOKEN in .env file")
 
+# Updated API endpoints for legacy API
 BUBBLEMAPS_API_URL = "https://api-legacy.bubblemaps.io"
 BUBBLEMAPS_APP_URL = "https://app.bubblemaps.io"
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+
+# API Keys
+BUBBLEMAPS_API_KEY = os.getenv('BUBBLEMAPS_API_KEY')
+COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY')
 
 # Chain mappings for CoinGecko
 CHAIN_TO_PLATFORM = {
@@ -38,6 +43,17 @@ CHAIN_TO_PLATFORM = {
     'avax': 'avalanche',
     'poly': 'polygon-pos',
     'arbi': 'arbitrum-one',
+    'base': 'base'
+}
+
+# Chain mappings for Bubblemaps
+CHAIN_TO_BUBBLEMAPS = {
+    'eth': 'ethereum',
+    'bsc': 'bsc',
+    'ftm': 'fantom',
+    'avax': 'avalanche',
+    'poly': 'polygon',
+    'arbi': 'arbitrum',
     'base': 'base'
 }
 
@@ -99,79 +115,134 @@ async def get_market_data(addr: str, chain: str) -> dict:
             logger.error(f"Market data error: {e}", exc_info=True)
             return {}
 
-async def get_token_info(addr: str, chain: str = 'eth') -> dict:
-    """Fetch token info from Bubblemaps."""
-    logger.info(f"Fetching token info for {addr} on {chain}")
-    
+async def get_token_info(contract_address: str, chain: str = 'eth') -> dict:
+    """Gets all the important information about a token, like who owns it and how it's distributed"""
     async with aiohttp.ClientSession() as session:
-        try:
-            # Get metadata
-            meta_url = f"{BUBBLEMAPS_API_URL}/map-metadata?token={addr}&chain={chain}"
-            async with session.get(meta_url, timeout=15) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Bubblemaps metadata API returned status {resp.status} for {addr}")
-                    return None
-                meta = await resp.json()
-                if meta.get('status') != 'OK':
-                    logger.warning(f"Bubblemaps metadata status: {meta.get('status')}, message: {meta.get('message')}")
-                    return None
-            
-            # Get token data
-            data_url = f"{BUBBLEMAPS_API_URL}/map-data?token={addr}&chain={chain}"
-            async with session.get(data_url, timeout=15) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Bubblemaps data API returned status {resp.status} for {addr}")
-                    return None
-                data = await resp.json()
-            
-            # Extract relevant fields from the responses
-            result = {
-                'full_name': data.get('full_name', 'Unknown'),
-                'symbol': data.get('symbol', 'N/A'),
-                'decentralization_score': meta.get('decentralisation_score'),
-                'percent_in_cexs': meta.get('identified_supply', {}).get('percent_in_cexs'),
-                'percent_in_contracts': meta.get('identified_supply', {}).get('percent_in_contracts'),
-                'last_update': meta.get('dt_update', 'Unknown'),
-                'is_nft': data.get('is_X721', False),
-                'top_holders': data.get('nodes', [])[:5],
+        # Get token's metadata first
+        metadata_url = f"{BUBBLEMAPS_API_URL}/map-metadata?token={contract_address}&chain={chain}"
+        async with session.get(metadata_url) as response:
+            if response.status != 200:
+                return None
+            metadata = await response.json()
+            if metadata.get('status') != 'OK':
+                return None
+
+        # Get detailed token data
+        legacy_url = f"{BUBBLEMAPS_API_URL}/map-data?token={contract_address}&chain={chain}"
+        async with session.get(legacy_url) as response:
+            if response.status != 200:
+                return None
+                
+            legacy_data = await response.json()
+            token_data = {
+                'symbol': legacy_data.get('symbol'),
+                'full_name': legacy_data.get('full_name'),
+                'is_nft': legacy_data.get('is_X721', False)
             }
             
-            return result
-        
-        except Exception as e:
-            logger.error(f"Error fetching token info: {e}", exc_info=True)
-            return None
+            # Get detailed holder information
+            nodes = legacy_data.get('nodes', [])
+            if not nodes:
+                return None
+                
+            token_data['top_holders'] = []
+            for node in nodes[:5]:  # Get top 5 holders
+                # Extract name from the node data
+                name = node.get('name', '')
+                if not name:
+                    # Try to get a more descriptive name
+                    if node.get('is_contract', False):
+                        name = "Contract"
+                    else:
+                        # Use address as fallback
+                        address = node.get('address', '')
+                        if address:
+                            name = f"Wallet ({address[:6]}...{address[-4:]})"
+                        else:
+                            name = "Unknown"
+                
+                holder_info = {
+                    'address': node.get('address', 'Unknown'),
+                    'percentage': node.get('percentage', 0),
+                    'amount': node.get('amount', 0),
+                    'is_contract': node.get('is_contract', False),
+                    'name': name
+                }
+                token_data['top_holders'].append(holder_info)
+            
+            # Get metadata information
+            token_data['decentralization_score'] = metadata.get('decentralisation_score')
+            identified_supply = metadata.get('identified_supply', {})
+            token_data['percent_in_cexs'] = identified_supply.get('percent_in_cexs')
+            token_data['contract_holder_percentage'] = identified_supply.get('percent_in_contracts')
+            token_data['last_update'] = metadata.get('dt_update')
+            
+            # Calculate token metrics
+            token_data['holder_count'] = len(nodes)  # Total holders
+            token_data['whale_count'] = sum(1 for n in nodes if n['percentage'] > 1)  # Big holders with >1%
+            
+            # Calculate transaction flow
+            links = legacy_data.get('links', [])
+            total_flow = sum(link['forward'] + link['backward'] for link in links)
+            token_data['total_flow'] = total_flow
+            
+            # Calculate a decentralization score (0-100)
+            # A higher score means the token is more evenly distributed
+            # We look at three things:
+            # 1. How much do the biggest holders own? (Less is better, up to 50 points)
+            # 2. How many different holders are there? (More is better, up to 30 points)
+            # 3. How much is in smart contracts? (Less is better, up to 20 points)
+            score = (
+                max(0, 50 - (token_data.get('top_holders', [])[0]['percentage'] / 2)) +    # Up to 50 points for distribution
+                min(30, len(nodes) / 5) +                      # Up to 30 points for number of holders
+                max(0, 20 - (token_data.get('contract_holder_percentage', 0) / 5))         # Up to 20 points for low contract holdings
+            )
+            token_data['decentralization_score'] = min(100, round(score))
+            
+            return token_data
 
 async def capture_bubblemap(contract_address: str, chain: str = 'eth') -> str:
-    """Capture a screenshot of the token's bubble map visualization."""
+    """Takes a picture of the token's bubble map visualization from the website"""
+    # Set up Chrome options for headless mode
     options = Options()
-    options.add_argument('--headless')
+    options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
     
     try:
-        driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+        logger.info(f"Starting screenshot capture for {contract_address}")
+        # Use Chrome directly, not the Remote WebDriver
+        driver = webdriver.Chrome(options=options)
+        
+        # Visit the token's page and wait for it to load
         url = f"{BUBBLEMAPS_APP_URL}/{chain}/token/{contract_address}"
         logger.info(f"Loading URL: {url}")
         driver.get(url)
-        logger.info("Waiting for bubble map canvas to be present...")
-        WebDriverWait(driver, 60).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
-        )
-        logger.info("Element found; waiting additional 10 seconds for rendering.")
-        await asyncio.sleep(10)  # Allow additional time for rendering
+        logger.info("Waiting for page to load...")
         
-        timestamp = int(time.time())
-        screenshot_path = f"bubblemap_{contract_address}_{timestamp}.png"
+        # Wait for specific elements to be visible
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "bubblemaps-canvas"))
+            )
+            # Additional wait to ensure visualization is rendered
+            await asyncio.sleep(5)
+        except Exception as e:
+            logger.warning(f"Timeout waiting for elements: {e}")
+        
+        # Save the bubble map as an image
+        screenshot_path = f"bubblemap_{contract_address}.png"
+        logger.info(f"Taking screenshot and saving to {screenshot_path}")
         driver.save_screenshot(screenshot_path)
-        logger.info(f"Screenshot saved: {screenshot_path}")
+        logger.info("Screenshot saved successfully")
         return screenshot_path
     except Exception as e:
-        logger.error(f"Error during screenshot capture: {e}", exc_info=True)
+        logger.error(f"Error during screenshot capture: {e}")
         raise
     finally:
+        # Always close the browser when we're done
         if 'driver' in locals():
             driver.quit()
 
@@ -213,7 +284,6 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         logger.info(f"Processing token request: {addr} on {chain}")
         
         try:
-            # Execute API calls concurrently if possible
             token_info = await get_token_info(addr, chain)
             market_data = await get_market_data(addr, chain)
         except Exception as e:
@@ -224,7 +294,6 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
             await processing_message.edit_text("❌ Token not found or not supported on Bubblemaps")
             return
             
-        # Start screenshot capture asynchronously
         screenshot_task = asyncio.create_task(capture_bubblemap(addr, chain))
         
         full_name = token_info.get('full_name', 'Unknown')
@@ -234,7 +303,6 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         
         analysis = f"📊 {token_type} Analysis for {full_name} ({symbol})\n\n"
         
-        # Market data section
         if market_data:
             price = market_data.get('price')
             market_cap = market_data.get('market_cap')
@@ -253,37 +321,56 @@ async def handle_contract_address(update: Update, context: ContextTypes.DEFAULT_
         else:
             analysis += "Market Data: N/A\n\n"
         
-        # Decentralization metrics
         decentralization_score = token_info.get('decentralization_score')
         percent_in_cexs = token_info.get('percent_in_cexs')
-        percent_in_contracts = token_info.get('percent_in_contracts')
+        percent_in_contracts = token_info.get('contract_holder_percentage')
         
         analysis += "Decentralization Metrics:\n"
-        analysis += f"- Score: {decentralization_score if decentralization_score is not None else 'N/A'}\n"
-        analysis += f"- Percent in CEXs: {percent_in_cexs if percent_in_cexs is not None else 'N/A'}%\n"
-        analysis += f"- Percent in Contracts: {percent_in_contracts if percent_in_contracts is not None else 'N/A'}%\n\n"
+        if decentralization_score is not None:
+            analysis += f"- Score: {decentralization_score}/100\n"
+        else:
+            analysis += "- Score: N/A\n"
+        if percent_in_cexs is not None:
+            analysis += f"- Percent in CEXs: {percent_in_cexs:.1f}%\n"
+        else:
+            analysis += "- Percent in CEXs: N/A\n"
+        if percent_in_contracts is not None:
+            analysis += f"- Percent in Contracts: {percent_in_contracts:.1f}%\n"
+        else:
+            analysis += "- Percent in Contracts: N/A\n"
+        analysis += "\n"
         
-        # Top holders
-        analysis += "Top Holders:\n"
+        analysis += "Top 5 Holders:\n"
         top_holders = token_info.get('top_holders', [])
         if top_holders:
             for idx, holder in enumerate(top_holders, 1):
-                label = holder.get('label', 'Unknown')
-                amount = holder.get('total', 0)
-                analysis += f"{idx}. {label}: {format_number(amount)}\n"
+                percentage = holder.get('percentage', 0)
+                amount = holder.get('amount', 0)
+                name = holder.get('name', 'Unknown')
+                address = holder.get('address', 'Unknown')
+                is_contract = holder.get('is_contract', False)
+                contract_status = '📜' if is_contract else '👤'
+                
+                analysis += (
+                    f"{idx}. {contract_status} {name}\n"
+                    f"   └ {address[:8]}...{address[-4:]}\n"
+                    f"   └ {percentage:.2f}% ({amount} tokens)\n"
+                )
         else:
             analysis += "No holder data available\n"
-            
+        
         last_update = token_info.get('last_update')
         analysis += f"\nLast Update: {last_update}\n"
+        
         analysis += f"\n🔗 View on Bubblemaps: {BUBBLEMAPS_APP_URL}/{chain}/token/{addr}"
         
-        # Wait for screenshot capture
         try:
-            screenshot = await asyncio.wait_for(screenshot_task, timeout=60)
-            with open(screenshot, 'rb') as photo:
-                await update.message.reply_photo(photo=photo, caption=analysis)
-            os.remove(screenshot)
+            screenshot_path = await asyncio.wait_for(screenshot_task, timeout=60)
+            await update.message.reply_photo(
+                photo=open(screenshot_path, 'rb'),
+                caption=analysis
+            )
+            os.remove(screenshot_path)
         except asyncio.TimeoutError:
             logger.error("Screenshot capture timed out")
             await update.message.reply_text(

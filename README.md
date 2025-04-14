@@ -1,22 +1,18 @@
 # Bubblemaps Telegram Bot
 
-A Telegram bot that provides token analysis using Bubblemaps API. Get instant access to bubble map visualizations, market data, and decentralization scores for any supported token.
+A Telegram bot that provides detailed token analysis using Bubblemaps data. The bot generates bubble maps and provides comprehensive token information including market data, decentralization metrics, and holder analysis.
 
 ## Features
 
-- Generate and display token bubble map screenshots
-- Provide key token metrics:
-  - Market capitalization
-  - Current price
-  - 24-hour trading volume
-  - Decentralization score
-- Easy-to-use interface through Telegram
+- 📊 Generate and display token bubble maps
+- 💰 Market data (price, market cap, volume)
+- 🔐 Decentralization score and metrics
+- 👥 Detailed holder analysis
+- 💎 Supply distribution information
+- 🔄 Transfer activity metrics
+- 🌐 Support for multiple chains (ETH, BSC, FTM, AVAX, etc.)
 
-## Prerequisites
-
-- Python 3.8+
-- Chrome/Chromium browser (for Selenium)
-- Telegram Bot Token (get from @BotFather)
+## Setup
 
 1. Clone the repository:
 ```bash
@@ -24,97 +20,86 @@ git clone https://github.com/yourusername/bubblemaps-telegram-bot.git
 cd bubblemaps-telegram-bot
 ```
 
-2. Create and activate a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
-```
-
-3. Install dependencies:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables:
+3. Set up environment variables:
 ```bash
 cp .env.example .env
-# Edit .env and add your Telegram bot token
 ```
-TELEGRAM_TOKEN=your_telegram_bot_token
-```
+Edit `.env` and add your:
+- Telegram Bot Token (get from [@BotFather](https://t.me/BotFather))
+- Optional: Bubblemaps API Key
+- Optional: CoinGecko API Key
 
-## Usage
-
-1. Start the bot:
+4. Run the bot:
 ```bash
 python bot.py
 ```
 
-2. Open Telegram and search for your bot using its username
+## Docker Deployment
 
-3. Start a conversation with the bot using the `/start` command
-
-4. Send any supported token's contract address to get its analysis
-
-## Example
-
-Send a contract address to the bot:
-```
-0x1234...abcd
-```
-
-The bot will respond with:
-- A screenshot of the token's bubble map
-- Token information including market cap, price, and volume
-- Decentralization score
-- Direct link to view on Bubblemaps
-
-## Error Handling
-
-The bot includes robust error handling for:
-- Invalid contract addresses
-- Unsupported tokens
-- API connection issues
-- Screenshot generation failures
-
-## Security Notes
-
-- Never share your API keys or tokens
-- The bot runs in headless mode for security
-- All temporary files (screenshots) are automatically cleaned up
-
-## Deployment
-
-You can deploy this bot to Railway.app for 24/7 availability:
-
-1. Create an account on [Railway.app](https://railway.app)
-
-2. Install Railway CLI:
+1. Build the Docker image:
 ```bash
-npm i -g @railway/cli
+docker build -t bubblemaps-bot .
 ```
 
-3. Login to Railway:
+2. Run the container:
 ```bash
-railway login
+docker run -d --env-file .env bubblemaps-bot
 ```
 
-4. Create a new project:
-```bash
-railway init
-```
+## Usage
 
-5. Add your environment variables in Railway dashboard:
-   - Go to your project settings
-   - Add `TELEGRAM_TOKEN` with your bot token
+1. Start a chat with your bot on Telegram
+2. Send `/start` to get started
+3. Send a token contract address followed by the chain (optional, defaults to ETH)
+   Example: `0x1234... eth`
 
-6. Deploy your bot:
-```bash
-railway up
-```
+## Supported Chains
 
-Your bot will now run 24/7 on Railway's infrastructure!
+- `eth` - Ethereum
+- `bsc` - Binance Smart Chain
+- `ftm` - Fantom
+- `avax` - Avalanche
+- `poly` - Polygon
+- `arbi` - Arbitrum
+- `base` - Base
+
+## Response Format
+
+The bot provides:
+1. Token Analysis Message:
+   - Basic token information
+   - Market data
+   - Supply distribution
+   - Decentralization metrics
+   - Holder analysis
+   - Top holders
+   - Transfer activity
+   - Last update timestamp
+
+2. Bubble Map Visualization:
+   - Interactive token distribution map
+   - Holder relationships
+   - Concentration visualization
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests!
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- [Bubblemaps](https://bubblemaps.io) for providing the bubble map data
+- [CoinGecko](https://www.coingecko.com) for market data
+- [python-telegram-bot](https://python-telegram-bot.org) for the Telegram bot framework
